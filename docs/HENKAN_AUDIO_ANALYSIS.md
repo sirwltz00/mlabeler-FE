@@ -44,3 +44,14 @@ All analysis and refinement code is in `core/src/commonMain`. It has no Python,
 JVM process, filesystem, native library, server or platform-specific dependency.
 It therefore shares the same implementation across the core module's current
 JVM, Android, iOS and WebAssembly targets.
+
+
+## GitHub Actions Gradle wrapper permissions
+
+The CI workflows explicitly run `chmod +x ./gradlew` on non-Windows runners
+before invoking the POSIX Gradle wrapper. This is intentional: creating a
+GitHub commit through the web upload interface or repacking an archive on a
+filesystem that does not preserve POSIX executable bits can turn `gradlew`
+into a non-executable file. Windows desktop packaging invokes `gradlew.bat`
+explicitly. These workflow safeguards do not change the application targets
+or move any analysis code out of Kotlin Multiplatform `commonMain`.

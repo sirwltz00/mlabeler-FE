@@ -25,7 +25,7 @@ unzip -q -j -o "$DIR"/app/lwjgl-[0-9]*-natives-windows.jar 'windows/x64/org/lwjg
 unzip -q -j -o "$DIR"/app/lwjgl-nfd-*-natives-windows.jar 'windows/x64/org/lwjgl/nfd/lwjgl_nfd.dll' -d "$DIR/natives"
 VERSION=$(grep '^app.version=' gradle.properties | cut -d= -f2)
 # icon, version information and manifest (a program without them looks suspicious to antivirus heuristics)
-tools/launcher/make-resources.sh "$VERSION"
+bash tools/launcher/make-resources.sh "$VERSION"
 (cd tools/launcher && GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H windowsgui" -o "../../$DIR/mLabeler.exe" .)
 # the program runs as runtime\bin\mLabeler.exe, a copy of java.exe with the program's name and icon: the Task
 # Manager shows "mLabeler" instead of "OpenJDK Platform binary" (the manifest, with its DPI settings, stays Java's)

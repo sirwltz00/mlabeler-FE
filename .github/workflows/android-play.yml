@@ -23,6 +23,10 @@ jobs:
       MLABELER_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure Gradle wrapper is executable
+        if: runner.os != 'Windows'
+        shell: bash
+        run: chmod +x ./gradlew
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - uses: android-actions/setup-android@v3

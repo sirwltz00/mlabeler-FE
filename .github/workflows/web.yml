@@ -15,6 +15,10 @@ jobs:
       LIBGL_ALWAYS_SOFTWARE: '1'
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure Gradle wrapper is executable
+        if: runner.os != 'Windows'
+        shell: bash
+        run: chmod +x ./gradlew
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - uses: actions/setup-node@v4
