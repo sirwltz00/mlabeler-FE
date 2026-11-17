@@ -57,6 +57,10 @@ private val aligner = L("Aligner model from the toolkit (slower)", "Модель
 private val methodAbout = L(
     "The built-in way is usually better and takes seconds. Aligner models learned on sung phrases, not on single syllables with silence around them: they place consonant starts less exactly, need the syllables turned into their own phonemes (which fails for some banks) and load a large model first.",
     "Встроенный способ обычно точнее и работает за секунды. Модели выравнивания обучены на пропетых фразах, а не на отдельных слогах с тишиной вокруг: они менее точно ставят начало согласной, требуют перевода слогов в фонемы (для некоторых банков это невозможно) и сначала загружают большую модель.")
+private val henkanAnalysisT = L("Henkan acoustic boundary refinement", "Акустическое уточнение границ Henkan")
+private val henkanAnalysisAbout = L(
+    "Refines detected boundaries using spectral changes, voicing, high-frequency energy and confidence. Runs locally in shared Kotlin code on desktop, Android, iOS and WebAssembly. Uncertain detections keep the original timing.",
+    "Уточняет найденные границы по спектральным изменениям, звонкости, высокочастотной энергии и оценке достоверности. Работает локально в общем коде Kotlin на компьютере, Android, iOS и WebAssembly. При сомнительном результате сохраняется исходная расстановка.")
 private val preview = L("This file: {0}", "Этот файл: {0}")
 private val start = L("Make entries", "Сделать записи")
 
@@ -131,6 +135,11 @@ fun AutoOtoDialog(app: AppState) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (st in RecStyle.entries) Chip(if (st == RecStyle.Auto) auto() else st.name, style == st) { style = st }
             }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(henkanAnalysisT(), color = c.text, modifier = Modifier.weight(1f), fontSize = 13.sp)
+                Toggle(options.henkanAnalysis, { options = options.copy(henkanAnalysis = it) })
+            }
+            Text(henkanAnalysisAbout(), color = c.muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 6.dp))
             SectionTitle(methodT())
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Chip(builtIn(), !useAligner) { useAligner = false }

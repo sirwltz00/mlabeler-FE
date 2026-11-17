@@ -26,6 +26,8 @@ data class AutoOtoSettings(
     val style: RecStyle = RecStyle.Auto,
     /** Beats per minute of the recording; 0 = find syllables from the audio only. */
     val bpm: Double = 0.0,
+    /** Refine auto-oto boundaries with Henkan-style spectral, voicing and transient analysis. */
+    val henkanAnalysis: Boolean = true,
     /** Offset this far before the overlap, ms (syllables with a consonant). */
     val leftMarginMs: Double = 140.0,
     /** Offset this far before the overlap, ms (syllables without a consonant). */

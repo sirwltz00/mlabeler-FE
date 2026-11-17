@@ -444,7 +444,10 @@ class OtoState(private val ed: EditorState, private val app: AppState) {
                     } ?: error("Unsupported audio")
                     if (aligner == null) {
                         val timings = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                            mlabeler.core.oto.AutoOto.segment(audio.samples, audio.sampleRate, syl, settings.bpm)
+                            val initial = mlabeler.core.oto.AutoOto.segment(audio.samples, audio.sampleRate, syl, settings.bpm)
+                            if (settings.henkanAnalysis) mlabeler.core.oto.HenkanOtoRefiner.refineTimings(
+                                audio.samples, audio.sampleRate, initial,
+                            ) else initial
                         }
                         require(timings.isNotEmpty()) { "No syllable timings found" }
                         made[name.lowercase()] = mlabeler.core.oto.AutoOto.entries(name, timings, audio.durationMs, settings)
@@ -478,7 +481,12 @@ class OtoState(private val ed: EditorState, private val app: AppState) {
                         try {
                             val doc = mlabeler.app.toolkit.ToolkitClient.labelOf(res, 0.0, smp.audio.duration, k)
                             val phones = doc.tiers[doc.phonemeTierIndex()] as mlabeler.core.model.IntervalTier
-                            val timings = mlabeler.core.oto.AutoOto.fromPhonemes(phones, smp.syl)
+                            val refinedPhones = if (settings.henkanAnalysis) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                mlabeler.core.oto.HenkanOtoRefiner.refinePhones(
+                                    smp.audio.samples, smp.audio.sampleRate, phones,
+                                )
+                            } else phones
+                            val timings = mlabeler.core.oto.AutoOto.fromPhonemes(refinedPhones, smp.syl)
                             require(timings.size == smp.syl.size) { "The aligner did not place every syllable" }
                             made[smp.name.lowercase()] = mlabeler.core.oto.AutoOto.entries(smp.name, timings, smp.audio.durationMs, settings)
                         } catch (e: kotlinx.coroutines.CancellationException) { throw e

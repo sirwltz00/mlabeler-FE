@@ -75,8 +75,10 @@ Recordings and labels in shared folders remain available after granting the new 
 
 **oto and recording**
 - Automatic oto now has a review step: include/exclude individual additions, replacements and removals before
-  applying them as one undo step. Alias conflicts and failed recordings are listed separately.
-  Choose automatic spelling, kana, romaji or both, with an optional prefix/suffix; save custom profiles including
+  applying them as one undo step. Alias conflicts and failed recordings are listed separately. Optional
+  Henkan-style acoustic refinement uses spectral, voicing and transient cues to improve phoneme boundaries;
+  it runs in shared Kotlin code on desktop, Android, iOS and WebAssembly and preserves the original timing when
+  confidence is low. Choose automatic spelling, kana, romaji or both, with an optional prefix/suffix; save custom profiles including
   separate marker corrections for initial, CV, VC, VV, VCV and ending entries. Original defaults remain available.
 - Check Japanese alias coverage for a required syllable inventory and pitch/colour prefix/suffix group:
   full CV/VCV/CVVC coverage or preferred/fallback aliases of OpenUtau JA VCV / JA CVVC (legacy).
