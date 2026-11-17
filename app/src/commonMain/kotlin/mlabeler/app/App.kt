@@ -1,0 +1,135 @@
+package mlabeler.app
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import mlabeler.app.state.AppState
+import mlabeler.app.theme.AppTheme
+import mlabeler.app.theme.Themes
+import mlabeler.app.ui.CommandPalette
+import mlabeler.app.ui.EditorScreen
+import mlabeler.app.ui.SettingsDialog
+import mlabeler.app.ui.StartScreen
+import mlabeler.app.ui.windowEdge
+
+@Composable
+fun rememberAppState(): AppState {
+    val scope = rememberCoroutineScope()
+    return remember { AppState(scope) }
+}
+
+@Composable
+fun App(app: AppState = rememberAppState()) {
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
+    DisposableEffect(app, focus) {
+        app.finishUiEditing = { focus.clearFocus(force = true) }
+        onDispose { app.finishUiEditing = {} }
+    }
+    DisposableEffect(app) { onDispose { app.close() } }
+    androidx.compose.runtime.LaunchedEffect(app) { app.showCrashReport() }
+    val base = LocalDensity.current
+    val scale = app.settings.scale.coerceIn(0.5f, 2f)
+    mlabeler.app.ui.UiScale.current = scale
+    val st = app.settings
+    androidx.compose.runtime.LaunchedEffect(st.orientation, st.fullscreen) { Platform.applyScreen(st.orientation, st.fullscreen) }
+    CompositionLocalProvider(
+        LocalDensity provides Density(base.density * scale, base.fontScale),
+        mlabeler.app.ui.LocalKeepBarsFree provides (!Platform.isMobile || !st.fullscreen || st.avoidCutout),
+        mlabeler.app.ui.Motion.Local provides st.animations,
+    ) {
+        val font = androidx.compose.runtime.remember(st.font) { systemFontFamily(st.font) }
+        AppTheme(Themes.byId(app.settings.theme), font, crisp = app.settings.crisp) {
+            StorageAccess {
+              val frame = mlabeler.app.ui.LocalWindowFrame.current
+              androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().windowEdge(frame).countsWork(app)) {
+                frame?.let { mlabeler.app.ui.TitleBar(app, it) }
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    val ed = app.editor
+                    val rec = app.recorder
+                    val kar = app.karaoke
+                    if (kar != null) mlabeler.app.recorder.KaraokeScreen(app, kar)
+                    else if (rec != null) mlabeler.app.recorder.RecorderScreen(app, rec)
+                    else if (ed == null) StartScreen(app) else EditorScreen(app, ed)
+                    // the start screen shows messages too (an error opening a folder, the report of a crash)
+                    if (ed == null && rec == null && kar == null) mlabeler.app.ui.MessageToast(app, 24.dp)
+                    if (app.showCommands && ed != null) CommandPalette(app)
+                    if (app.showSettings) SettingsDialog(app)
+                    if (!app.settings.setupDone && rec == null && kar == null) mlabeler.app.ui.SetupDialog(app)
+                    if (app.showBatchRename && ed != null) mlabeler.app.ui.BatchRenameDialog(app)
+                    if (ed != null) app.renamingFile?.let { i -> mlabeler.app.ui.RenameFileDialog(ed, i) { app.renamingFile = null } }
+                    if (ed != null) app.trashingFile?.let { i -> mlabeler.app.ui.TrashFileDialog(ed, i) { app.trashingFile = null } }
+                    if (ed != null && app.mergingFiles) mlabeler.app.ui.MergeFilesDialog(ed) { app.mergingFiles = false }
+                    if (ed != null && app.trashingPicked) mlabeler.app.ui.TrashFilesDialog(ed) { app.trashingPicked = false }
+                    if (app.showSegments && ed != null) mlabeler.app.ui.SegmentDialog(app)
+                    if (app.updater.offer != null) mlabeler.app.ui.UpdateOfferDialog(app)
+                    if (app.showWorkspace && ed != null) mlabeler.app.ui.WorkspaceDialog(app)
+                    if (AppInfo.TOOLKIT_ENABLED && app.showAutolabel && ed != null) mlabeler.app.ui.AutolabelDialog(app)
+                    if (app.showCleanup && ed != null) mlabeler.app.ui.CleanupDialog(app)
+                    if (app.showHelp && app.settings.setupDone) mlabeler.app.ui.HelpDialog(app)
+                    // (an update offer or a crash report comes first; the tip waits for the folder dialog to close)
+                    if (app.showTips && app.settings.setupDone && app.updater.offer == null && app.folderPick == null && !app.showHelp) mlabeler.app.ui.TipsDialog(app)
+                    if (AppInfo.PLUGINS_ENABLED && app.showPlugins && ed != null) mlabeler.app.ui.PluginsDialog(app)
+                    if (app.showImport && ed != null) mlabeler.app.ui.ImportDialog(app)
+                    if (app.showDsExport && ed != null) mlabeler.app.ui.DsExportDialog(app, ed)
+                    if (app.showSummary && ed != null) mlabeler.app.ui.DatasetSummaryDialog(app, ed)
+                    if (app.showPhonemeCuts && ed != null) mlabeler.app.ui.PhonemeCutsDialog(app, ed)
+                    if (app.showRefine && ed != null) mlabeler.app.ui.RefineDialog(app, ed)
+                    if (AppInfo.TOOLKIT_ENABLED && app.showModelCompare && ed != null) mlabeler.app.ui.ModelCompareDialog(app, ed)
+                    if (app.showNiao && ed != null) mlabeler.app.ui.NiaoNiaoDialog(app, ed)
+                    if (app.showNfc && ed != null) mlabeler.app.ui.NfcDialog(app, ed)
+                    if (app.showUst && ed != null) mlabeler.app.ui.UstDialog(app, ed)
+                    if (AppInfo.TOOLKIT_ENABLED && app.showResynth && ed != null) mlabeler.app.ui.ResynthDialog(app, ed)
+                    if (app.showConvert && ed != null) mlabeler.app.ui.ConvertDialog(app, ed)
+                    if (AppInfo.TOOLKIT_ENABLED) app.wordsCheck?.let { mlabeler.app.ui.WordsDialog(app, it) }
+                    if (app.showUnitsOverview && ed != null) mlabeler.app.ui.UnitsOverviewDialog(app, ed)
+                    if (app.showSoundCheck && ed != null) mlabeler.app.ui.SoundCheckDialog(app, ed)
+                    if (app.pendingLeave != null) mlabeler.app.ui.LeaveDialog(app)
+                    if (app.showAutoOto && ed != null) mlabeler.app.ui.AutoOtoDialog(app)
+                    if (ed?.oto?.autoPreview != null) mlabeler.app.ui.OtoPreviewDialog(ed)
+                    if (app.showOtoReadiness && ed != null) mlabeler.app.ui.OtoReadinessDialog(ed) { app.showOtoReadiness = false; ed.requestFocus() }
+                    if (app.errorDetails != null) mlabeler.app.ui.ErrorDetailsDialog(app)
+                    app.folderPick?.let { pick ->
+                        mlabeler.app.ui.FolderBrowser(
+                            start = ed?.workspace?.root ?: Platform.homeDir(),
+                            onPick = { app.folderPick = null; pick(it) },
+                            onCancel = { app.folderPick = null },
+                        )
+                    }
+                }
+              }
+            }
+        }
+    }
+}
+
+/**
+ * Every input of the window tells the [mlabeler.app.state.WorkTimer] the user is working: keys, clicks, the wheel,
+ * and mouse moves while the window has the focus (a pointer passing over it on the way elsewhere is not work).
+ */
+@Composable
+private fun Modifier.countsWork(app: AppState): Modifier {
+    val focused = androidx.compose.runtime.rememberUpdatedState(androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused)
+    return this
+        .onPreviewKeyEvent { app.workTimer.activity(); false }
+        .pointerInput(app) {
+            awaitPointerEventScope {
+                while (true) {
+                    val e = awaitPointerEvent(PointerEventPass.Initial)
+                    val hover = e.type == PointerEventType.Move || e.type == PointerEventType.Enter || e.type == PointerEventType.Exit
+                    if (!hover || focused.value) app.workTimer.activity()
+                }
+            }
+        }
+}

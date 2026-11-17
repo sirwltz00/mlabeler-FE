@@ -1,0 +1,624 @@
+package mlabeler.app.state
+
+import kotlinx.serialization.Serializable
+import mlabeler.app.Platform
+import mlabeler.core.check.CheckSettings
+import mlabeler.core.format.LabelFormat
+import mlabeler.core.io.Paths
+import mlabeler.core.io.PlatformFs
+import mlabeler.core.io.Workspace
+
+@Serializable
+data class LayoutSettings(
+    val showFiles: Boolean = true,
+    val showInspector: Boolean = true,
+    val filesWidth: Float = 260f,
+    val inspectorWidth: Float = 300f,
+    val showWaveform: Boolean = true,
+    val showSpectrogram: Boolean = true,
+    /** Share of the audio area given to the waveform when both are shown. */
+    val waveShare: Float = 0.38f,
+    /** Height of the audio area (waveform + spectrogram) in dp; 0 = fill. */
+    val audioHeight: Float = 0f,
+    val tierHeight: Float = 40f,
+    /** Size of the label text on the lanes, sp (lanes grow to fit). */
+    val labelFontSize: Float = 13f,
+    /** Phoneme names also drawn over the waveform and the spectrogram, at [namesX], [namesY] of each phoneme (0..1). */
+    val namesOnAudio: Boolean = false,
+    val namesX: Float = 0.5f,
+    val namesY: Float = 0.5f,
+    val showPitch: Boolean = false,
+    val showPower: Boolean = false,
+    /** Sound editing mode: boundaries shown over the sound, how ("dash", "dot", "solid"), parts between pauses marked. */
+    val soundShowLabels: Boolean = true,
+    val soundLabelStyle: String = "dash",
+    val soundPhrases: Boolean = false,
+    /** First three formants as dots over the spectrogram. */
+    val showFormants: Boolean = false,
+    /** Pitch drawn over the spectrogram instead of its own lane. */
+    val pitchOverSpectrogram: Boolean = true,
+    val pitchShare: Float = 0.3f,
+    val powerShare: Float = 0.18f,
+    /** Waveform over the spectrogram and labels over both, instead of separate lanes. */
+    val overlay: Boolean = false,
+    /** Label tiers above the audio instead of below. */
+    val tiersOnTop: Boolean = false,
+    /** Spectrogram lane above the waveform lane. */
+    val spectrogramFirst: Boolean = false,
+    /** Which side the files/entries panel and the details panel are on: "left" or "right". */
+    val filesSide: String = "left",
+    val inspectorSide: String = "right",
+    /** Entries as a panel of their own (otherwise a tab of the files panel), its side and whether it's shown. */
+    val entriesSeparate: Boolean = false,
+    val entriesSide: String = "left",
+    val showEntries: Boolean = true,
+    /** The entries list scrolls to the phoneme selected on the timeline. */
+    val entriesFollow: Boolean = true,
+    /** Lanes from top to bottom ("wave", "spec", "pitch", "power", "labels"); empty = the usual order. */
+    val laneOrder: List<String> = emptyList(),
+    /** Share of the audio area per lane (dragged at the lines between lanes); missing = the usual share. */
+    val laneWeights: Map<String, Float> = emptyMap(),
+    /** Sizes of lanes and panels are fixed: their dividing lines can't be dragged. */
+    val locked: Boolean = false,
+    /** Vertical zoom of the waveform (Alt+wheel over it). */
+    val waveGain: Float = 1f,
+    /** oto: the selected alias in large type over the picture (renamed in place). */
+    val otoHeader: Boolean = true,
+    /** The floating notepad: shown, where (dp from the picture's top left), size, text size. */
+    val showNotepad: Boolean = false,
+    /** An ordinary scroll bar under the picture. */
+    val scrollbar: Boolean = true,
+    /** A strip over the scroll bar with the whole recording: its sound, what is labelled, where the view is. */
+    val minimap: Boolean = true,
+    /** Phonemes tinted gently by kind (vowels, consonants, pauses). */
+    val phonemeColors: Boolean = false,
+    val notepadX: Float = 40f,
+    val notepadY: Float = 40f,
+    val notepadW: Float = 320f,
+    val notepadH: Float = 220f,
+    val notepadFont: Float = 14f,
+    /** The notepad as a side panel (on [notepadSide]) instead of a window over the picture. */
+    val notepadDocked: Boolean = false,
+    val notepadSide: String = "right",
+    /** Sections of the details panel: their order and the folded ones. */
+    val inspectorOrder: List<String> = emptyList(),
+    val inspectorFolded: Set<String> = emptySet(),
+    /** A whole side of panels folded away (the buttons at the ends of the top bar). */
+    val leftCollapsed: Boolean = false,
+    val rightCollapsed: Boolean = false,
+    /** How much the spectrogram is darkened in the overlaid view so labels and the waveform stay readable (0..0.8). */
+    val overlayDim: Float = 0.35f,
+    /** Overlaid view: fill the waveform instead of drawing only its outline. */
+    val overlayWaveFill: Boolean = false,
+    /** Opacity of the waveform over the spectrogram: 1 = as in its own lane. */
+    val overlayWaveFillAlpha: Float = 0.85f,
+)
+
+@Serializable
+data class ViewSettings(
+    val palette: String = "",
+    val brightness: Float = 0f,
+    val contrast: Float = 1f,
+    val maxFreq: Float = 8000f,
+    /** Analysis window, ms (longer = finer frequencies, blurrier in time). */
+    val windowMs: Float = 25f,
+    /** Step between columns, ms; 0 = by file length. */
+    val hopMs: Float = 0f,
+    val bands: Int = 192,
+    val minDb: Float = -100f,
+    val maxDb: Float = -10f,
+)
+
+@Serializable
+data class EditSettings(
+    val ripple: Boolean = false,
+    val linked: Boolean = true,
+    val loop: Boolean = false,
+    val nudgeMs: Float = 5f,
+    /** The view during playback: "off", "page" (turns the page at the edge) or "keep" (the playhead stays at [followAt]). */
+    val follow: String = "off",
+    val followAt: Float = 0.5f,
+    /** Playback volume, 0..1. */
+    val volume: Float = 1f,
+    val minIntervalMs: Float = 1f,
+    val saveOnSwitch: Boolean = true,
+    val newFormat: LabelFormat = LabelFormat.Lab,
+    val otoLockedDrag: Boolean = true,
+    /** oto: after a marker is moved by hand: "none", "next" (the next entry), "done" (marked done) or "done-next". */
+    val otoAfterEdit: String = "none",
+    /** Only after this marker ([mlabeler.core.format.OtoMarker] name); empty = any. */
+    val otoAfterMarker: String = "",
+    /** Play a short piece around a boundary while it is dragged. */
+    val playOnDrag: Boolean = false,
+    /** Which phoneme a boundary "belongs" to: "end" = the one that ends at it, "start" = the one that starts at it.
+     *  Deleting a selected boundary removes that phoneme; Space plays it. */
+    val boundaryOwner: String = "end",
+    /** Space while playing starts again instead of stopping. */
+    val spaceRestarts: Boolean = false,
+    /** Mouse tool: "cursor" (click selects, drag moves boundaries), "cut" (click adds a boundary),
+     *  "pan" (dragging scrolls), "play" (click plays the phoneme, a selection plays when let go). */
+    val tool: String = "cursor",
+    /** After adding a boundary with the mouse: type the name of the new part right away. */
+    val cutAskName: Boolean = true,
+    /** After adding a boundary with the mouse: play the part before it. */
+    val cutPlay: Boolean = true,
+    /** Scissors cut on label lanes too (otherwise only over the audio; clicks on labels select and rename). */
+    val cutOnLanes: Boolean = false,
+    /** After moving a boundary, select the phoneme it belongs to (Space then plays it). */
+    val selectAfterDrag: Boolean = true,
+    /** A click on the waveform or spectrogram removes the phoneme selection (Space then plays from the cursor). */
+    val audioClickDeselects: Boolean = true,
+    /** Playback speed, 0.25..1, pitch kept. */
+    val speed: Float = 1f,
+    /** Boundaries placed or dragged by hand jump to the nearest zero crossing of the waveform (within 3 ms). */
+    val snapToZero: Boolean = false,
+    /** Opening another file keeps the scale (pixels per second) instead of the one remembered for that file. */
+    val keepZoom: Boolean = true,
+    /** Save every N seconds when there are changes; 0 = off. */
+    val autosaveSeconds: Int = 0,
+    /** Mouse tools 1–4 (cursor, scissors, hand, play); off = the cursor always. */
+    val tools: Boolean = true,
+) {
+    /** Tool modes are gone: what a click does is set per gesture in [MouseSettings]. */
+    val activeTool: String get() = "cursor"
+}
+
+/** What mouse gestures do, on label lanes and on the waveform/spectrogram. Values are [MouseActions] ids. */
+@Serializable
+data class MouseSettings(
+    /** A plain click on a label lane / on the audio: select, split, play… */
+    val tierClick: String = MouseActions.RENAME,
+    val audioClick: String = MouseActions.PLAY_FROM,
+    val tierDouble: String = MouseActions.RENAME,
+    val tierRight: String = MouseActions.PLAY_FROM,
+    val tierMiddle: String = MouseActions.DESELECT,
+    val tierCtrl: String = MouseActions.PLAY_FROM,
+    val tierAlt: String = MouseActions.DESELECT,
+    val audioDouble: String = MouseActions.SPLIT_NAME,
+    val audioRight: String = MouseActions.PLAY,
+    val audioMiddle: String = MouseActions.DESELECT,
+    val audioCtrl: String = MouseActions.PLAY_FROM,
+    val audioAlt: String = MouseActions.DESELECT,
+    /** The mouse wheel: "scroll" through time, or "phonemes" (selects the next/previous phoneme; Shift+wheel scrolls). */
+    val wheel: String = "scroll",
+)
+
+object MouseActions {
+    const val NONE = "none"
+    const val SELECT = "select"
+    const val PLAY = "play"
+    const val PLAY_FROM = "play-from"
+    const val RENAME = "rename"
+    const val SPLIT = "split"
+    const val SPLIT_NAME = "split-name"
+    const val DELETE = "delete"
+    const val DESELECT = "deselect"
+    val all = listOf(NONE, SELECT, DESELECT, PLAY, PLAY_FROM, RENAME, SPLIT, SPLIT_NAME, DELETE)
+}
+
+@Serializable
+data class ToolkitSettings(
+    /** The fully portable build has its own toolkit on its own port, so it never uses one installed elsewhere. */
+    val url: String = if (mlabeler.app.Platform.portableDir != null) "http://127.0.0.1:8766" else "http://127.0.0.1:8765",
+    val token: String = "",
+    val lastModel: String = "",
+    val lastLanguage: String = "",
+    /**
+     * Autolabelling (and quick labelling) keeps the model's confidence in every phoneme, so the checks mark those
+     * it isn't sure of (below checks.confidenceBelow). Off by default.
+     */
+    val markUnsure: Boolean = false,
+    /** The author last given to an own model (Settings → Autolabel → your own models). */
+    val lastAuthor: String = "",
+    /** Other languages that may occur in the text (TIFA models), e.g. en for English words in Chinese lyrics. */
+    val extraLanguages: List<String> = emptyList(),
+    /** Model for recognising phonemes without lyrics. */
+    val lastSegmentModel: String = "",
+    /** Aligning without text: recognise the words with Whisper first (a large download on first use). */
+    val whisper: Boolean = false,
+    /** The Whisper model that recognises the words for autolabelling. */
+    val whisperModel: String = "whisper-large-v3-turbo",
+    /** Autolabelling one recording places Whisper's words straight away, not the text of the field. */
+    val whisperDirect: Boolean = true,
+    /** Words no dictionary or G2P can spell are left out instead of failing the file. */
+    val skipUnknownWords: Boolean = false,
+    /** Breaths (AP) are placed where the aligner hears them (SOFA, HubertFA detect them; TIFA may place one at pauses). */
+    val breaths: Boolean = true,
+    /** Long recordings are aligned again in pieces cut at pauses, of up to [splitSeconds] (SOFA, TIFA). */
+    val splitLong: Boolean = true,
+    val splitSeconds: Float = 25f,
+    /** Phoneme recognition (WFL-ASR): see [mlabeler.app.toolkit.SegmentOptions]. */
+    val wfl: WflSettings = WflSettings(),
+    /** Refinement of the phoneme boundaries after autolabelling (off by default). */
+    val refine: RefineSettings = RefineSettings(),
+    /** Start the toolkit on this computer when it's needed and not running. */
+    val autoStart: Boolean = true,
+    /** `mvt` command or the folder it's in; empty = look in the usual places. */
+    val mvtPath: String = "",
+    /** What `uv tool install` installs: a git/zip URL or a local folder. */
+    val installSource: String = ToolkitSettings.DEFAULT_SOURCE,
+    /** Let phones and other computers in the local network use the toolkit started here. */
+    val shareOnNetwork: Boolean = false,
+    /** Before starting the toolkit, install a newer version from the install source if there is one. */
+    val autoUpdate: Boolean = true,
+    /** Revision (commit) of the source the installed toolkit was made from. */
+    val installedRevision: String = "",
+    /** When the source was last checked for a newer version (ms since epoch). */
+    val lastUpdateCheck: Long = 0,
+) {
+    companion object {
+        const val DEFAULT_SOURCE = "https://github.com/Megageorgio/mVocalToolkit/archive/refs/heads/main.zip"
+    }
+}
+
+/** Quick labelling by the model that comes with the program (see [mlabeler.app.state.QuickLabel]). */
+@Serializable
+data class QuickLabelSettings(
+    /** Language of the singing; empty = the language of the interface if the model knows it, else English. */
+    val language: String = "",
+    /** Phonemes already in the selected part are placed anew (the model only finds their boundaries). */
+    val usePhonemes: Boolean = false,
+)
+
+@Serializable
+data class ToolbarSettings(
+    /** Button groups shown, in order. */
+    val groups: List<String> = ToolbarGroups.simple,
+    /** Text under the buttons. */
+    val labels: Boolean = true,
+    val big: Boolean = true,
+    /** Order of all groups, shown or not (so turning one off and on keeps its place). */
+    val order: List<String> = emptyList(),
+    /** A button with the interface scale in percent (null = on phones and tablets only). */
+    val scaleButton: Boolean? = null,
+) {
+    fun fullOrder(): List<String> {
+        val known = (order + groups).distinct().filter { it in ToolbarGroups.all }.toMutableList()
+        // a group this list hasn't met yet goes after the one before it in [ToolbarGroups.all]
+        for ((i, g) in ToolbarGroups.all.withIndex()) if (g !in known) {
+            val after = ToolbarGroups.all.subList(0, i).lastOrNull { it in known }
+            known.add(if (after == null) 0 else known.indexOf(after) + 1, g)
+        }
+        return known
+    }
+
+    /**
+     * Groups added to the program after these settings were saved: placed after the group before them and shown
+     * when [ToolbarGroups.shownWith] is shown (the quick labelling next to autolabel).
+     */
+    fun withNewGroups(): ToolbarSettings {
+        val known = (order + groups).toSet()
+        val new = ToolbarGroups.all.filter { it !in known }
+        if (new.isEmpty() || known.isEmpty()) return this
+        val o = fullOrder()
+        val vis = groups.toSet() + new.filter { ToolbarGroups.shownWith[it] in groups }
+        return copy(order = o, groups = o.filter { it in vis })
+    }
+
+    /** Shows or hides [g] keeping every group where it was. */
+    fun toggled(g: String, on: Boolean): ToolbarSettings {
+        val o = fullOrder()
+        val vis = groups.toSet().let { if (on) it + g else it - g }
+        return copy(order = o, groups = o.filter { it in vis })
+    }
+
+    fun moved(g: String, delta: Int): ToolbarSettings {
+        val o = fullOrder().toMutableList()
+        val i = o.indexOf(g)
+        val j = i + delta
+        if (i < 0 || j !in o.indices) return this
+        o[i] = o[j]; o[j] = g
+        return copy(order = o, groups = o.filter { it in groups })
+    }
+}
+
+object ToolbarGroups {
+    const val FILES = "files"
+    const val HISTORY = "history"
+    const val PLAY = "play"
+    const val EDIT = "edit"
+    const val MODES = "modes"
+    const val VIEW = "view"
+    const val ZOOM = "zoom"
+    const val AUTO = "auto"
+    /** Quick labelling by the built-in MCFL model, with its language. */
+    const val QUICK = "quick"
+    const val MARKS = "marks"
+    const val EXTRAS = "extras"
+    val all = listOf(FILES, HISTORY, PLAY, EDIT, MODES, AUTO, QUICK, MARKS, VIEW, ZOOM, EXTRAS)
+    val simple = listOf(FILES, HISTORY, PLAY, EDIT, MODES, AUTO, QUICK)
+    /** A group new to saved settings is shown if this one is. */
+    val shownWith = mapOf(QUICK to AUTO)
+}
+
+@Serializable
+data class AppSettings(
+    val language: String = "",
+    val theme: String = "modern-dark",
+    val scale: Float = 1f,
+    val recent: List<String> = emptyList(),
+    val layout: LayoutSettings = LayoutSettings(),
+    val view: ViewSettings = ViewSettings(),
+    val edit: EditSettings = EditSettings(),
+    val checks: CheckSettings = CheckSettings(),
+    val toolkit: ToolkitSettings = ToolkitSettings(),
+    val quick: QuickLabelSettings = QuickLabelSettings(),
+    /** Key bindings changed by the user: command id to chords ("ctrl+shift+<key code>"). */
+    val keymap: Map<String, List<String>> = emptyMap(),
+    /** Last parameters per plugin, as JSON objects. */
+    val pluginParams: Map<String, String> = emptyMap(),
+    /** Layouts saved by the user, by name. */
+    val layoutPresets: Map<String, LayoutSettings> = emptyMap(),
+    /** The short guide was shown once. */
+    val seenHelp: Boolean = false,
+    /** A tip about a less obvious feature at every start. */
+    val tipsAtStart: Boolean = true,
+    /** How the interface moves: "normal", "reduced" or "off" (see [mlabeler.app.ui.Motion]). */
+    val animations: String = "normal",
+    /** Jumps of the view (to a selection, a found place, a difference) glide instead of happening at once. */
+    val smoothView: Boolean = true,
+    /** The boundary under the pointer is drawn thicker before it is grabbed. */
+    val hoverBoundary: Boolean = false,
+    /** What autolabel, a plugin, undo or redo changed glows for a moment. */
+    val flashChanges: Boolean = true,
+    /** The tip the next start shows. */
+    val tipNext: Int = 0,
+    /** Phones: "landscape", "portrait" or "auto". */
+    val orientation: String = "landscape",
+    /** Phones: hide the status and navigation bars. */
+    val fullscreen: Boolean = true,
+    /** Phones: keep content away from the camera cutout. */
+    val avoidCutout: Boolean = false,
+    /** The user picked the interface size (else phones get a smaller default). */
+    val scaleChosen: Boolean = false,
+    /** Plugins on the quick slots (Ctrl+1 … Ctrl+4). */
+    val pluginSlots: List<String> = emptyList(),
+    /** File / Edit / View … menus at the top (computers). */
+    val menuBar: Boolean = !Platform.isMobile,
+    /** Computers: the program draws the window title itself, with the menus in it. */
+    val titleBarMenu: Boolean = true,
+    val statusBar: Boolean = true,
+    val toolbar: ToolbarSettings = ToolbarSettings(),
+    /** The first-start choice (simple or everything) was made. */
+    val setupDone: Boolean = false,
+    /** List mp3, flac, ogg … too (needs ffmpeg on computers); WAV only by default. */
+    val otherAudio: Boolean = false,
+    /** Id of the chosen work environment (built-in id or "user:<name>"). */
+    val environment: String = "basic",
+    val mouse: MouseSettings = MouseSettings(),
+    /** Interface font from the system; empty = the theme's. */
+    val font: String = "",
+    /** No smoothing anywhere it can be turned off: square corners, text with hard pixel edges. */
+    val crisp: Boolean = false,
+    /** The program behind the settings window is darkened (off: colours of a theme are seen as they are). */
+    val settingsDim: Boolean = true,
+    val status: StatusSettings = StatusSettings(),
+    val updates: UpdateSettings = UpdateSettings(),
+    val clean: CleanSettings = CleanSettings(),
+    val karaoke: KaraokeSettings = KaraokeSettings(),
+    val doneSound: DoneSoundSettings = DoneSoundSettings(),
+    val niao: NiaoSettings = NiaoSettings(),
+    val workTime: WorkTimeSettings = WorkTimeSettings(),
+    val discord: DiscordSettings = DiscordSettings(),
+    val otoNote: OtoNoteSettings = OtoNoteSettings(),
+    val autoOto: mlabeler.core.oto.AutoOtoSettings = mlabeler.core.oto.AutoOtoSettings(),
+    val otoProfiles: List<OtoProfile> = emptyList(),
+) {
+    companion object {
+        private val path get() = Paths.join(Platform.dataDir(), "settings.json")
+
+        fun load(): AppSettings = try {
+            if (PlatformFs.exists(path)) Workspace.json.decodeFromString(serializer(), PlatformFs.read(path).decodeToString())
+                .let { it.copy(toolbar = it.toolbar.withNewGroups()) }
+                // phones: the size button turned off only by the "studio" environment comes back (on by default there)
+                .let { if (Platform.isMobile && it.environment == "studio" && it.toolbar.scaleButton == false) it.copy(toolbar = it.toolbar.copy(scaleButton = null)) else it }
+            else AppSettings()
+        } catch (e: Exception) {
+            AppSettings()
+        }
+
+        fun save(s: AppSettings) {
+            try {
+                PlatformFs.write(path, Workspace.json.encodeToString(serializer(), s).encodeToByteArray())
+            } catch (_: Exception) {
+            }
+        }
+    }
+}
+
+/** Items of the status bar (ids of [mlabeler.app.ui.StatusItems]) on each side, in order; the others are hidden. */
+@Serializable
+data class StatusSettings(
+    val left: List<String> = listOf("entry", "done", "session", "worktime", "range"),
+    val right: List<String> = listOf("work", "problems", "help", "zoom"),
+    val percent: Boolean = true,
+) {
+    /** Puts [id] at the end of [side] ("left", "right"; "" hides it). */
+    fun place(id: String, side: String) = StatusSettings(
+        left = (left - id).let { if (side == "left") it + id else it },
+        right = (right - id).let { if (side == "right") it + id else it },
+        percent = percent,
+    )
+
+    fun move(id: String, step: Int): StatusSettings {
+        fun shift(l: List<String>): List<String> {
+            val i = l.indexOf(id)
+            if (i < 0) return l
+            val j = (i + step).coerceIn(0, l.size - 1)
+            return l.toMutableList().also { it.removeAt(i); it.add(j, id) }
+        }
+        return copy(left = shift(left), right = shift(right))
+    }
+}
+
+/** Layouts that come with the app. */
+object LayoutPresets {
+    val builtIn: List<Pair<mlabeler.app.i18n.L, LayoutSettings>> = listOf(
+        mlabeler.app.i18n.L("Simple", "Простой") to LayoutSettings(showSpectrogram = false, showPitch = false, showPower = false, overlay = false),
+        mlabeler.app.i18n.L("Waveform and spectrogram", "Волна и спектрограмма") to LayoutSettings(),
+        mlabeler.app.i18n.L("One picture", "Одна картинка") to LayoutSettings(overlay = true, showPitch = true),
+        mlabeler.app.i18n.L("Notes and pitch", "Ноты и высота") to LayoutSettings(showWaveform = false, showPitch = true, pitchOverSpectrogram = true, showPower = true),
+    )
+
+    /** Applies the view parts of [p], keeping panel sizes. */
+    fun apply(current: LayoutSettings, p: LayoutSettings) = p.copy(
+        showFiles = current.showFiles, showInspector = current.showInspector,
+        filesWidth = current.filesWidth, inspectorWidth = current.inspectorWidth,
+    )
+}
+
+/** Panels assigned to a side ("left"/"right"), shown or not. */
+fun LayoutSettings.panelsOn(side: String): List<String> = buildList {
+    if (filesSide == side) add("files")
+    if (entriesSeparate && entriesSide == side) add("entries")
+    if (inspectorSide == side) add("details")
+    if (notepadDocked && notepadSide == side) add("notepad")
+}
+
+private fun LayoutSettings.shown(p: String) = when (p) {
+    "files" -> showFiles
+    "entries" -> showEntries
+    "notepad" -> showNotepad
+    else -> showInspector
+}
+
+private fun LayoutSettings.withShown(p: String, on: Boolean) = when (p) {
+    "files" -> copy(showFiles = on)
+    "entries" -> copy(showEntries = on)
+    "notepad" -> copy(showNotepad = on)
+    else -> copy(showInspector = on)
+}
+
+private fun LayoutSettings.sideOf(p: String) = when (p) {
+    "files" -> filesSide
+    "entries" -> entriesSide
+    else -> inspectorSide
+}
+
+fun LayoutSettings.sideVisible(side: String): Boolean =
+    !(if (side == "left") leftCollapsed else rightCollapsed) && panelsOn(side).any { shown(it) }
+
+/** Folds a side away, or brings it back (showing its panels if all were hidden). */
+fun LayoutSettings.toggleSide(side: String): LayoutSettings {
+    if (sideVisible(side)) return if (side == "left") copy(leftCollapsed = true) else copy(rightCollapsed = true)
+    var l = if (side == "left") copy(leftCollapsed = false) else copy(rightCollapsed = false)
+    if (panelsOn(side).none { l.shown(it) }) for (p in panelsOn(side)) l = l.withShown(p, true)
+    return l
+}
+
+/** Shows or hides one panel; showing it also unfolds its side. */
+fun LayoutSettings.togglePanel(p: String): LayoutSettings {
+    val on = !shown(p)
+    var l = withShown(p, on)
+    if (on) {
+        val side = sideOf(p)
+        l = if (side == "left") l.copy(leftCollapsed = false) else l.copy(rightCollapsed = false)
+    }
+    return l
+}
+
+/**
+ * A boundary refiner model moves the phoneme boundaries of a labelling to where they are in the sound (never the
+ * phonemes): after autolabelling when [enabled], or on ready labels by the command. [mode]: auto, normal, safe.
+ */
+@Serializable
+data class RefineSettings(
+    val enabled: Boolean = false,
+    val model: String = "mrefiner-ru-v0.1.0",
+    val mode: String = "auto",
+)
+
+/**
+ * Karaoke: how loud the music is (0..1.5), which model separates the voice from the music ("auto": chosen by the
+ * computer) and which one recognises the words.
+ */
+@Serializable
+data class KaraokeSettings(
+    val musicLevel: Float = 1f,
+    val separation: String = "auto",
+    val whisper: String = "whisper-large-v3-turbo",
+)
+
+/**
+ * oto.ini: an entry sung as a note through the toolkit, to hear how the voicebank will sound with it. [method]:
+ * "world", "nsf" (the DiffSinger vocoder [model]) or "resampler" (an UTAU resampler program at [resampler] on the
+ * toolkit's computer, with [flags]). [tone]: a note name ("C4"); empty = from the alias or the folder name ("ka_C4",
+ * "A3"), else the recording's own pitch. [notes]: 2 sings the entry twice in a row to hear how it joins.
+ */
+@Serializable
+data class OtoNoteSettings(
+    val method: String = "world",
+    val model: String = "pc-nsf-hifigan-2025.02",
+    val resampler: String = "",
+    val flags: String = "",
+    val tone: String = "",
+    val lengthMs: Int = 600,
+    val notes: Int = 1,
+)
+
+@Serializable
+data class OtoProfile(val name: String, val settings: mlabeler.core.oto.AutoOtoSettings)
+
+/** A sound played when long work (autolabelling and the like) ends: off and without a sound by default. */
+@Serializable
+data class DoneSoundSettings(
+    val enabled: Boolean = false,
+    /** The sound file (WAV, or what the platform can decode). */
+    val path: String = "",
+    /** Only after work that took at least this long, seconds. */
+    val minSeconds: Int = 20,
+)
+
+/** Options of phoneme recognition without text (WFL-ASR); negative confidence = the model's own value. */
+@Serializable
+data class WflSettings(
+    val confidence: Float = -1f,
+    val decoder: String = "viterbi",
+    val viterbiBias: Float = 5f,
+    val silenceThreshold: Float = 0.005f,
+    val minSilence: Float = 0.5f,
+)
+
+/** NiaoNiao voicebanks: shown in a folder of .inf marks, or everywhere when [always]. */
+@Serializable
+data class NiaoSettings(
+    val always: Boolean = false,
+    /** A text file with the full set of syllables (one per line or separated by spaces); empty = Mandarin pinyin. */
+    val syllables: String = "",
+    /** The range of pitches as note names ("C4"); empty = [spread] semitones around the bank's middle pitch. */
+    val low: String = "",
+    val high: String = "",
+    val spread: Int = 2,
+)
+
+/** Counting the time spent labelling ([WorkTimer]): on, and how long without any activity stops the count. */
+@Serializable
+data class WorkTimeSettings(
+    val enabled: Boolean = true,
+    val idleSeconds: Int = 60,
+)
+
+/**
+ * Computers: what is labelled is shown in the Discord profile (in English, for friends of any language), as code
+ * editors do, with each part on or off.
+ */
+@Serializable
+data class DiscordSettings(
+    val enabled: Boolean = true,
+    val folder: Boolean = true,
+    val file: Boolean = true,
+    /** The selected phoneme. */
+    val phoneme: Boolean = false,
+    /** "76 of 139": the recording's place in the folder. */
+    val position: Boolean = true,
+    /** How many recordings are marked done. */
+    val done: Boolean = false,
+    /** Long work going on (autolabelling, refining…) instead of the file, with its progress. */
+    val work: Boolean = true,
+    /** The model doing that work. */
+    val model: Boolean = true,
+    /** Labels or oto.ini. */
+    val mode: Boolean = true,
+    /** The clock: "folder" (since the folder was opened), "work" (labelling time of the folder), "start" (since the program started) or "off". */
+    val time: String = "folder",
+)

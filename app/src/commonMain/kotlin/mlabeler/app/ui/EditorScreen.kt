@@ -1,0 +1,618 @@
+package mlabeler.app.ui
+
+import androidx.compose.ui.graphics.graphicsLayer
+
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
+import mlabeler.app.theme.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import mlabeler.app.Platform
+import mlabeler.app.i18n.S
+import mlabeler.app.state.AppState
+import mlabeler.app.fileDrop
+import mlabeler.app.state.EditorState
+import mlabeler.app.state.Mode
+import mlabeler.app.state.panelsOn
+import mlabeler.app.state.sideVisible
+import mlabeler.app.theme.T
+import mlabeler.core.io.Paths
+
+enum class WidthClass { Compact, Medium, Expanded }
+
+fun widthClass(width: Dp) = when {
+    width < 700.dp -> WidthClass.Compact
+    width < 1100.dp -> WidthClass.Medium
+    else -> WidthClass.Expanded
+}
+
+@Composable
+fun EditorScreen(app: AppState, ed: EditorState) {
+    val c = T.c
+    val focus = remember { FocusRequester() }
+    val v = app.settings.view
+    LaunchedEffect(v.windowMs, v.hopMs, v.bands, v.minDb, v.maxDb) {
+        // wait until the slider is let go
+        kotlinx.coroutines.delay(400)
+        if (ed.specNeedsUpdate()) ed.recomputeSpectrogram()
+    }
+    // audio added to or removed from the folder (by a file manager, a recorder…) shows up without reopening it
+    LaunchedEffect(ed) {
+        while (true) {
+            kotlinx.coroutines.delay(3000)
+            val changed = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { runCatching { ed.workspace.audioChanged() }.getOrDefault(false) }
+            if (changed) ed.rescan()
+        }
+    }
+    LaunchedEffect(app.settings.layout.showFormants, ed.audio) { if (app.settings.layout.showFormants) ed.ensureFormants() }
+    // speed or loop changed while playing: apply at once
+    LaunchedEffect(app.settings.edit.speed, app.settings.edit.loop) { ed.playbackSettingsChanged() }
+    LaunchedEffect(ed) {
+        ed.requestFocus = { runCatching { focus.requestFocus() } }
+        focus.requestFocus()
+    }
+    BoxWithConstraints(
+        Modifier.fillMaxSize().themeBackground()
+            .windowInsetsPadding(mlabeler.app.ui.screenInsets())
+            .focusRequester(focus)
+            .focusable()
+            .onKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown || ed.editingText != null) return@onKeyEvent false
+                // typing in a field: only shortcuts with Ctrl/Cmd work
+                if (TextFocus.active && !e.isCtrlPressed && !e.isMetaPressed) return@onKeyEvent false
+                if (ed.toolkitBusy != null) {
+                    // nothing is edited while autolabel works; Esc stops it
+                    if (e.key == androidx.compose.ui.input.key.Key.Escape) ed.cancelToolkit()
+                    return@onKeyEvent true
+                }
+                val cmd = Commands.find(e, ed.mode) ?: return@onKeyEvent false
+                if (!cmd.enabled(ed)) return@onKeyEvent true
+                cmd.run(ed, app)
+                true
+            }
+    ) {
+        val wc = widthClass(maxWidth)
+        when (wc) {
+            WidthClass.Compact -> CompactEditor(app, ed)
+            else -> WideEditor(app, ed, wc)
+        }
+        AutolabelBusy(ed)
+        MessageToast(app, if (wc == WidthClass.Compact) 84.dp else 40.dp)
+    }
+}
+
+@Composable
+private fun WideEditor(app: AppState, ed: EditorState, wc: WidthClass) {
+    val c = T.c
+    val s = app.settings
+    val l = s.layout
+    var overlayDetails by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+        if (s.menuBar && !Platform.isMobile && LocalWindowFrame.current == null) MenuBar(app, ed)
+        TopBar(app, ed, wc, overlayDetails) { overlayDetails = !overlayDetails }
+        Divider()
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            // panels go to the side the user put them on; two on one side share it as tabs
+            val left = mutableListOf<SidePanelId>()
+            val right = mutableListOf<SidePanelId>()
+            if (l.showFiles) (if (l.filesSide == "right") right else left) += SidePanelId.Files
+            if (l.entriesSeparate && l.showEntries && ed.mode != Mode.Oto) (if (l.entriesSide == "right") right else left) += SidePanelId.Entries
+            if (l.showInspector && wc == WidthClass.Expanded) (if (l.inspectorSide == "left") left else right) += SidePanelId.Details
+            if (l.showNotepad && l.notepadDocked) (if (l.notepadSide == "left") left else right) += SidePanelId.Notepad
+            if (l.leftCollapsed) left.clear()
+            if (l.rightCollapsed) right.clear()
+            // sound editing: its tools become the first tab on the side of the details panel while the mode is on
+            val sound = ed.soundMode && ed.mode == Mode.Labels
+            if (sound) (if (l.showInspector && wc == WidthClass.Expanded && l.inspectorSide == "left") left else right).add(0, SidePanelId.Sound)
+            fun width(w: Float, panels: List<SidePanelId>) = (if (SidePanelId.Sound in panels) w.coerceAtLeast(290f) else w).coerceIn(180f, 520f).dp
+            // a side opens and closes smoothly (its last panels stay drawn while it closes)
+            val lastLeft = remember { mutableStateOf(left.toList()) }
+            val lastRight = remember { mutableStateOf(right.toList()) }
+            if (left.isNotEmpty()) lastLeft.value = left.toList()
+            if (right.isNotEmpty()) lastRight.value = right.toList()
+            val sideMs = Motion.ms(170)
+            val slide = Motion.full()
+            fun enter(start: Boolean) = if (sideMs == 0) androidx.compose.animation.EnterTransition.None
+                else if (slide) androidx.compose.animation.expandHorizontally(androidx.compose.animation.core.tween(sideMs), if (start) Alignment.Start else Alignment.End) +
+                    androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(sideMs))
+                else androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(sideMs))
+            fun exit(start: Boolean) = if (sideMs == 0) androidx.compose.animation.ExitTransition.None
+                else if (slide) androidx.compose.animation.shrinkHorizontally(androidx.compose.animation.core.tween(sideMs), if (start) Alignment.Start else Alignment.End) +
+                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(sideMs))
+                else androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(sideMs))
+            Row(Modifier.fillMaxSize()) {
+                androidx.compose.animation.AnimatedVisibility(left.isNotEmpty(), enter = enter(true), exit = exit(true)) {
+                    val panels = lastLeft.value
+                    Row(Modifier.fillMaxHeight()) {
+                        PanelStack(app, ed, panels, Modifier.width(width(l.filesWidth, panels)).fillMaxHeight())
+                        VSplitter(!app.settings.layout.locked) { d -> app.update { it.copy(layout = it.layout.copy(filesWidth = (it.layout.filesWidth + d).coerceIn(180f, 520f))) } }
+                    }
+                }
+                Box(Modifier.weight(1f).fillMaxHeight()) {
+                    EditorBody(app, ed)
+                }
+                androidx.compose.animation.AnimatedVisibility(right.isNotEmpty(), enter = enter(false), exit = exit(false)) {
+                    val panels = lastRight.value
+                    Row(Modifier.fillMaxHeight()) {
+                        VSplitter(!app.settings.layout.locked) { d -> app.update { it.copy(layout = it.layout.copy(inspectorWidth = (it.layout.inspectorWidth - d).coerceIn(180f, 520f))) } }
+                        PanelStack(app, ed, panels, Modifier.width(width(l.inspectorWidth, panels)).fillMaxHeight())
+                    }
+                }
+            }
+            // medium width: details slide over the timeline
+            if (wc == WidthClass.Medium) {
+                androidx.compose.animation.AnimatedVisibility(
+                    overlayDetails, modifier = Modifier.align(Alignment.CenterEnd),
+                    enter = slideInHorizontally { it }, exit = slideOutHorizontally { it },
+                ) {
+                    Row(Modifier.fillMaxHeight()) {
+                        Divider(vertical = true)
+                        Inspector(ed, Modifier.width(300.dp).fillMaxHeight())
+                    }
+                }
+            }
+        }
+        if (s.statusBar) {
+            Divider()
+            StatusBar(app, ed)
+        }
+    }
+}
+
+@Composable
+private fun EditorBody(app: AppState, ed: EditorState) {
+    val c = T.c
+    var dropHover by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize()) {
+    if (ed.mode != Mode.Oto) ModelResultsBar(ed) else if (app.settings.layout.otoHeader) OtoHeader(ed)
+    // a recording dropped on the picture opens (its folder too, when it is from elsewhere)
+    Box(Modifier.weight(1f).fillMaxWidth().fileDrop({ dropHover = it }) { app.openDropped(it) }) {
+        when {
+            ed.loadError != null -> EmptyNote(ed.loadError ?: "")
+            ed.item == null -> EmptyNote(if (ed.items.isEmpty()) S.noFiles() else "")
+            else -> Timeline(ed, app.settings.layout, app.settings.view, { nl -> app.update { it.copy(layout = nl) } }, Modifier.fillMaxSize())
+        }
+        if (dropHover) DropHint(dropOpen())
+        if (app.settings.layout.showNotepad && !app.settings.layout.notepadDocked) FloatingNotepad(app, ed)
+        if (ed.loading) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(Modifier.size(28.dp), color = c.accent, strokeWidth = 2.dp)
+            }
+        }
+    }
+    // the map of the recording is the scroll bar too; the plain one only without it
+    if (ed.item != null && ed.audio != null && app.settings.layout.minimap) MiniMap(ed)
+    else if (ed.item != null && ed.audio != null && app.settings.layout.scrollbar) TimeScrollBar(ed)
+    }
+}
+
+@Composable
+private fun TopBar(app: AppState, ed: EditorState, wc: WidthClass, overlayDetails: Boolean, toggleOverlay: () -> Unit) {
+    val c = T.c
+    val s = app.settings
+    val item = ed.item
+    // left: files and the title; middle: tools, scrolling when they do not fit; right: always visible
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = if (Platform.isMobile) 44.dp else 46.dp).background(c.panel).padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // folds the left side away; only there when some panel lives on the left
+        if (s.layout.panelsOn("left").isNotEmpty()) IconBtn(Icons.panelLeft, Commands.leftSide.title(), active = s.layout.sideVisible("left")) { Commands.leftSide.run(ed, app) }
+        Spacer(Modifier.width(6.dp))
+        Column(Modifier.widthIn(min = 60.dp, max = 260.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    item?.let { Paths.name(it.audioPath) } ?: Paths.name(ed.workspace.root),
+                    color = c.text, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
+                )
+                if (ed.dirty) Text(" •", color = c.accent, fontSize = 14.sp)
+            }
+            // folder name and what is labelled there; a click opens the folder settings
+            Text(
+                Paths.name(ed.workspace.root) + "  ·  " + kindTitle(ed.mode),
+                color = c.muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.clickable { app.showWorkspace = true },
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        ScrollRow(Modifier.weight(1f).padding(vertical = 1.dp), horizontalArrangement = Arrangement.End) {
+            ToolbarGroupsRow(app, ed)
+        }
+        Sep()
+        if (wc == WidthClass.Expanded) {
+            EnvironmentButton(app)
+            Spacer(Modifier.width(4.dp))
+        }
+        IconBtn(Icons.settings, S.settings(), Commands.settings.keyLabel) { app.showSettings = true }
+        if (!s.menuBar || Platform.isMobile) MenuButton(app, ed)
+        if (wc == WidthClass.Medium) {
+            IconBtn(Icons.panelRight, S.toggleInspector(), active = overlayDetails) { toggleOverlay() }
+        } else {
+            if (s.layout.panelsOn("right").isNotEmpty()) IconBtn(Icons.panelRight, Commands.rightSide.title(), active = s.layout.sideVisible("right")) { Commands.rightSide.run(ed, app) }
+        }
+    }
+}
+
+@Composable
+private fun Sep() {
+    val c = T.c
+    Box(Modifier.padding(horizontal = 4.dp).width(c.borderWidth).height(20.dp).background(c.border))
+}
+
+@Composable
+private fun TextIcon(text: String) {
+    Text(text, color = T.c.muted, fontSize = 12.sp)
+}
+
+// ---------------- phones ----------------
+
+@Composable
+private fun CompactEditor(app: AppState, ed: EditorState) {
+    val c = T.c
+    var showFiles by remember { mutableStateOf(false) }
+    var showDetails by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxWidth().height(52.dp).background(c.panel).padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconBtn(Icons.folder, S.files()) { showFiles = true }
+                Column(Modifier.weight(1f).clickable { showFiles = true }.padding(horizontal = 6.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(ed.item?.let { Paths.name(it.audioPath) } ?: "", color = c.text, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        if (ed.dirty) Text("  •", color = c.accent, fontSize = 15.sp)
+                    }
+                    val pos = ed.items.indexOfFirst { it.id == ed.item?.id }
+                    Text("${pos + 1} / ${ed.items.size}", color = c.muted, fontSize = 11.sp)
+                }
+                IconBtn(Icons.undo, S.undo(), enabled = ed.canUndo) { ed.undo() }
+                IconBtn(Icons.redo, S.redo(), enabled = ed.canRedo) { ed.redo() }
+                IconBtn(Icons.save, S.save(), enabled = ed.dirty || ed.item?.labelPath == null) { ed.save() }
+                if (app.settings.toolbar.scaleButton != false) ScaleTool(app, app.settings.scale, labels = false, big = false)
+                CompactMenu(app, ed) { showDetails = true }
+            }
+            Divider()
+            Box(Modifier.weight(1f).fillMaxWidth()) { EditorBody(app, ed) }
+            Divider()
+            CompactToolbar(app, ed) { showDetails = true }
+        }
+        AnimatedVisibility(showFiles, enter = slideInHorizontally { -it }, exit = slideOutHorizontally { -it }) {
+            Column(Modifier.fillMaxSize().background(c.panel)) {
+                Row(Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconBtn(Icons.back, S.back()) { showFiles = false }
+                    Text(Paths.name(ed.workspace.root), color = c.text, fontSize = 16.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    IconBtn(Icons.home, S.closeFolder()) { app.leaveFolderThen { app.closeFolder() } }
+                }
+                Divider()
+                SidePanel(ed, Modifier.weight(1f).fillMaxWidth()) { showFiles = false }
+            }
+        }
+        if (showDetails) {
+            Box(Modifier.fillMaxSize().background(c.bg.copy(alpha = 0.5f)).clickable(remember { MutableInteractionSource() }, null) { showDetails = false })
+        }
+        AnimatedVisibility(
+            showDetails, modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically { it }, exit = slideOutVertically { it },
+        ) {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 520.dp).clip(RoundedCornerShape(topStart = c.radius * 2, topEnd = c.radius * 2))
+                    .background(c.panel).windowInsetsPadding(mlabeler.app.ui.screenInsets()),
+            ) {
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(width = 36.dp, height = 4.dp).clip(RoundedCornerShape(2.dp)).background(c.border))
+                }
+                Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(S.inspector(), color = c.text, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                    IconBtn(Icons.close, S.close()) { showDetails = false }
+                }
+                Inspector(ed, Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactMenu(app: AppState, ed: EditorState, onDetails: () -> Unit) {
+    MenuButton(app, ed, extra = listOf(
+        MItem(S.inspector()) { onDetails() },
+        MItem(S.closeFolder()) { app.leaveFolderThen { app.closeFolder() } },
+    ))
+}
+
+/** Large targets for one-handed use. Boundary actions act on the selected boundary or the cursor. */
+@Composable
+private fun CompactToolbar(app: AppState, ed: EditorState, onDetails: () -> Unit) {
+    val c = T.c
+    Row(
+        Modifier.fillMaxWidth().background(c.panel).windowInsetsPadding(mlabeler.app.ui.screenInsets())
+            .horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        val big = 48.dp
+        IconBtn(if (ed.playing) Icons.stop else Icons.play, if (ed.playing) S.stop() else S.play(), size = big) { ed.togglePlay() }
+        IconBtn(Icons.left, S.prevInterval(), size = big) { ed.stepInterval(-1) }
+        IconBtn(Icons.right, S.nextInterval(), size = big) { ed.stepInterval(1) }
+        IconBtn(Icons.nudgeLeft, S.nudgeLeft(), size = big, enabled = ed.selection is mlabeler.app.state.Selection.Bound) { ed.nudge(-1) }
+        IconBtn(Icons.nudgeRight, S.nudgeRight(), size = big, enabled = ed.selection is mlabeler.app.state.Selection.Bound) { ed.nudge(1) }
+        if (ed.mode == Mode.Oto) {
+            IconBtn(Icons.up, Commands.prevEntry.title(), size = big) { ed.oto.step(-1) }
+            IconBtn(Icons.down, Commands.nextEntry.title(), size = big) { ed.oto.step(1) }
+            IconBtn(Icons.plus, Commands.otoAdd.title(), size = big) { ed.oto.add() }
+        } else {
+            IconBtn(Icons.split, S.split(), size = big) { ed.splitAt() }
+            IconBtn(Icons.merge, S.merge(), size = big) { ed.mergeSelected() }
+        }
+        IconBtn(Icons.edit, S.rename(), size = big, enabled = ed.selectedInterval() != null) { onDetails() }
+        IconBtn(Icons.ripple, S.ripple(), size = big, active = app.settings.edit.ripple) { Commands.ripple.run(ed, app) }
+        IconBtn(Icons.check, S.toggleDone(), size = big, active = ed.item?.let { ed.marks(it).done } == true) { Commands.done.run(ed, app) }
+    }
+}
+
+/** Files, or oto entries in oto mode. */
+@Composable
+fun SidePanel(ed: EditorState, modifier: Modifier = Modifier, onOpened: () -> Unit = {}) {
+    if (ed.mode == Mode.Oto) return OtoEntryList(ed, modifier, onOpened)
+    var tab by remember { mutableStateOf(0) }
+    val c = T.c
+    // entries in a panel of their own: here only the files
+    if (ed.app.settings.layout.entriesSeparate) return FilesPanel(ed, modifier.background(c.panel), onOpened)
+    Column(modifier.background(c.panel)) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 10.dp, top = 8.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            for ((k, t) in listOf(S.files(), mlabeler.app.ui.entriesTitle()).withIndex()) {
+                val sel = k == tab
+                // tabs share the width and shorten their names in a narrow panel, so none goes out of reach
+                Text(
+                    t, fontSize = 13.sp, color = if (sel) c.text else c.muted, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).clip(RoundedCornerShape(c.radius)).background(if (sel) c.panelAlt else c.panel)
+                        .clickable { tab = k }.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
+        if (tab == 0) FilesPanel(ed, Modifier.weight(1f).fillMaxWidth(), onOpened) else EntriesPanel(ed, Modifier.weight(1f).fillMaxWidth(), onOpened)
+    }
+}
+
+@Composable
+fun MessageToast(app: AppState, bottom: Dp) {
+    val c = T.c
+    val m = app.message ?: return
+    // a new message rises in softly (when the interface may move)
+    val full = Motion.full()
+    val on = Motion.on()
+    val appear = androidx.compose.runtime.remember(m) { androidx.compose.animation.core.Animatable(if (on) 0f else 1f) }
+    val ms = Motion.ms(180)
+    androidx.compose.runtime.LaunchedEffect(m) { appear.animateTo(1f, androidx.compose.animation.core.tween(ms)) }
+    Box(Modifier.fillMaxSize().padding(bottom = bottom, start = 16.dp, end = 16.dp).graphicsLayer {
+        alpha = appear.value
+        if (full) translationY = (1f - appear.value) * 14.dp.toPx()
+    }, contentAlignment = Alignment.BottomCenter) {
+        if (m.error && m.hasDetails) {
+            Row(
+                Modifier.widthIn(max = 640.dp).clip(RoundedCornerShape(c.radius)).background(c.danger)
+                    .clickable { app.errorDetails = m.text }.padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(m.headline, color = c.bg, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                Text(ErrorTitles.more(), color = c.bg, fontSize = 13.sp,
+                    modifier = Modifier.padding(start = 12.dp).clip(RoundedCornerShape(c.radius)).background(c.bg.copy(alpha = 0.18f))
+                        .clickable { app.errorDetails = m.text }.padding(horizontal = 10.dp, vertical = 6.dp))
+                Text("✕", color = c.bg, fontSize = 13.sp,
+                    modifier = Modifier.padding(start = 4.dp).clip(RoundedCornerShape(c.radius)).clickable { app.dismissMessage() }.padding(horizontal = 10.dp, vertical = 6.dp))
+            }
+        } else Box(
+            Modifier.clip(RoundedCornerShape(c.radius)).background(if (m.error) c.danger else c.text)
+                .clickable { app.dismissMessage() }.padding(horizontal = 14.dp, vertical = 9.dp),
+        ) {
+            Text(m.text, color = c.bg, fontSize = 13.sp)
+        }
+    }
+}
+
+enum class SidePanelId { Files, Entries, Details, Notepad, Sound }
+
+private val panelNames = mapOf(
+    SidePanelId.Files to mlabeler.app.i18n.L("Files and entries", "Файлы и записи"),
+    SidePanelId.Entries to mlabeler.app.i18n.L("Entries", "Записи"),
+    SidePanelId.Details to mlabeler.app.i18n.L("Details", "Подробности"),
+    SidePanelId.Notepad to notepadTitle,
+    SidePanelId.Sound to ToolLabels.sound,
+)
+private val toOtherSide = mlabeler.app.i18n.L("Move to the other side", "Перенести на другую сторону")
+private val hidePanel = mlabeler.app.i18n.L("Hide", "Скрыть")
+private val splitEntries = mlabeler.app.i18n.L("Entries as a panel of their own", "Записи отдельной панелью")
+private val joinEntries = mlabeler.app.i18n.L("Back into the files panel", "Вернуть в панель файлов")
+
+/** Side panels of one side: a header with tabs when there are two, move/hide buttons while arranging. */
+@Composable
+private fun PanelStack(app: AppState, ed: EditorState, panels: List<SidePanelId>, modifier: Modifier) {
+    val c = T.c
+    var chosen by remember { mutableStateOf<SidePanelId?>(null) }
+    var beforeSound by remember { mutableStateOf<SidePanelId?>(null) }
+    // the sound tools open in front when sound editing starts; the previous tab comes back when it ends
+    val hasSound = SidePanelId.Sound in panels
+    androidx.compose.runtime.LaunchedEffect(hasSound) {
+        if (hasSound) { beforeSound = chosen; chosen = SidePanelId.Sound } else if (chosen == SidePanelId.Sound || chosen == null) chosen = beforeSound
+    }
+    val current = chosen?.takeIf { it in panels } ?: panels.first { it != SidePanelId.Sound || panels.size == 1 }
+    val arranging = app.arrangePanels
+    Column(modifier.background(c.panel)) {
+        if (panels.size > 1 || arranging || current == SidePanelId.Notepad) {
+            Row(Modifier.fillMaxWidth().background(if (arranging) c.accent.copy(alpha = 0.12f) else c.panel).padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                for ((k, p) in panels.withIndex()) {
+                    val sel = p == current
+                    Text(
+                        (if (p == SidePanelId.Files && app.settings.layout.entriesSeparate) S.files() else panelNames.getValue(p)()), fontSize = 13.sp, color = if (sel) c.text else c.muted, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false).clip(RoundedCornerShape(c.radius)).background(animatedColor(if (sel && panels.size > 1) c.panelAlt else c.panelAlt.copy(alpha = 0f)).value)
+                            .clickable { chosen = p }.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+                }
+                if (current == SidePanelId.Notepad && !arranging) {
+                    IconBtn(Icons.layers, toOtherSide(), size = 28.dp) {
+                        app.update { st -> st.copy(layout = st.layout.copy(notepadSide = if (st.layout.notepadSide == "right") "left" else "right")) }
+                    }
+                    IconBtn(Icons.panelLeft, toWindowT(), size = 28.dp) { app.update { st -> st.copy(layout = st.layout.copy(notepadDocked = false)) } }
+                    IconBtn(Icons.close, hidePanel(), size = 28.dp) { app.update { st -> st.copy(layout = st.layout.copy(showNotepad = false)) } }
+                }
+                if (arranging) {
+                    if (current == SidePanelId.Files && ed.mode != Mode.Oto && !app.settings.layout.entriesSeparate) IconBtn(Icons.panelRight, splitEntries(), size = 28.dp) {
+                        app.update { st -> st.copy(layout = st.layout.copy(entriesSeparate = true, showEntries = true, entriesSide = st.layout.filesSide)) }
+                    }
+                    if (current == SidePanelId.Entries) IconBtn(Icons.merge, joinEntries(), size = 28.dp) {
+                        app.update { st -> st.copy(layout = st.layout.copy(entriesSeparate = false)) }
+                    }
+                    IconBtn(Icons.layers, toOtherSide(), size = 28.dp) {
+                        app.update { st ->
+                            fun flip(x: String) = if (x == "right") "left" else "right"
+                            st.copy(layout = when (current) {
+                                SidePanelId.Files -> st.layout.copy(filesSide = flip(st.layout.filesSide))
+                                SidePanelId.Entries -> st.layout.copy(entriesSide = flip(st.layout.entriesSide))
+                                SidePanelId.Details -> st.layout.copy(inspectorSide = flip(st.layout.inspectorSide))
+                                SidePanelId.Notepad -> st.layout.copy(notepadSide = flip(st.layout.notepadSide))
+                                SidePanelId.Sound -> st.layout.copy(inspectorSide = flip(st.layout.inspectorSide))
+                            })
+                        }
+                    }
+                    IconBtn(Icons.close, hidePanel(), size = 28.dp) {
+                        app.update { st ->
+                            st.copy(layout = when (current) {
+                                SidePanelId.Files -> st.layout.copy(showFiles = false)
+                                SidePanelId.Entries -> st.layout.copy(showEntries = false)
+                                SidePanelId.Details -> st.layout.copy(showInspector = false)
+                                SidePanelId.Notepad -> st.layout.copy(showNotepad = false)
+                                SidePanelId.Sound -> { ed.soundMode = false; st.layout }
+                            })
+                        }
+                    }
+                }
+            }
+            Divider()
+        }
+        // switching tabs fades from one panel to the other
+        androidx.compose.animation.Crossfade(current, Modifier.weight(1f).fillMaxWidth(), androidx.compose.animation.core.tween(Motion.ms(130)), label = "panel") { p ->
+            when (p) {
+                SidePanelId.Files -> SidePanel(ed, Modifier.fillMaxSize())
+                SidePanelId.Entries -> EntriesPanel(ed, Modifier.fillMaxSize().background(c.panel)) {}
+                SidePanelId.Details -> Inspector(ed, Modifier.fillMaxSize())
+                SidePanelId.Notepad -> NotepadText(app, ed, Modifier.fillMaxSize())
+                SidePanelId.Sound -> SoundPanel(app, ed, Modifier.fillMaxSize(), titled = panels.size == 1)
+            }
+        }
+    }
+}
+
+object ErrorTitles {
+    val more = mlabeler.app.i18n.L("Details…", "Подробнее…")
+    val title = mlabeler.app.i18n.L("Error details", "Подробности ошибки")
+    val copy = mlabeler.app.i18n.L("Copy", "Копировать")
+    val copied = mlabeler.app.i18n.L("Copied", "Скопировано")
+    val openLog = mlabeler.app.i18n.L("Open the log folder", "Открыть папку журнала")
+    val updateToolkit = mlabeler.app.i18n.L("Update the toolkit now", "Обновить тулкит сейчас")
+    val oldToolkit = mlabeler.app.i18n.L(
+        "The toolkit gave no reason. Newer versions of it report the exit code and the engine's last output, and keep the engine's whole output in a log: update it and run this again.",
+        "Тулкит не сообщил причину. Новые версии тулкита показывают код завершения и последние строки движка, а весь вывод сохраняют в журнал: обновите его и запустите ещё раз.")
+}
+
+/** The whole text of an error: selectable, copyable, with its log folder when the text names a log file here. */
+@Composable
+fun ErrorDetailsDialog(app: AppState) {
+    val text = app.errorDetails ?: return
+    val c = T.c
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    var copied by remember(text) { mutableStateOf(false) }
+    val log = remember(text) {
+        Regex("""(?:Full output|Update log|log):\s*(.+)""", RegexOption.IGNORE_CASE).findAll(text).lastOrNull()?.groupValues?.get(1)?.trim()
+            ?.takeIf { !mlabeler.app.Platform.isMobile && runCatching { mlabeler.core.io.PlatformFs.exists(it) }.getOrDefault(false) }
+    }
+    Overlay({ app.errorDetails = null }, 760) {
+        Column(Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(ErrorTitles.title(), color = c.text, fontSize = 17.sp, modifier = Modifier.weight(1f))
+                IconBtn(Icons.close, S.close()) { app.errorDetails = null }
+            }
+            Box(
+                Modifier.padding(top = 10.dp).fillMaxWidth().weight(1f, fill = false).clip(RoundedCornerShape(c.radius)).background(c.panelAlt)
+                    .border(c.borderWidth, c.border, RoundedCornerShape(c.radius)),
+            ) {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(
+                        text.trim(), color = c.text, fontSize = 12.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        modifier = Modifier.fillMaxWidth().scrollWithHint().padding(12.dp),
+                    )
+                }
+            }
+            // an engine died and an older toolkit lost its output
+            val noReason = "stopped unexpectedly" in text && "exit code" !in text
+            if (noReason) Text(ErrorTitles.oldToolkit(), color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
+            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (noReason && app.toolkit.canRunHere) Btn(ErrorTitles.updateToolkit(), primary = true) {
+                    app.toolkit.updateNow(); app.errorDetails = null; app.dismissMessage(); app.showAutolabel = true
+                }
+                Btn(if (copied) ErrorTitles.copied() else ErrorTitles.copy(), primary = !noReason) {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(text.trim())); copied = true
+                }
+                if (log != null) Btn(ErrorTitles.openLog()) { mlabeler.app.Platform.openInFileManager(mlabeler.core.io.Paths.parent(log)) }
+                Btn(S.close()) { app.errorDetails = null }
+            }
+        }
+    }
+}

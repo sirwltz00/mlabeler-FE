@@ -1,0 +1,48 @@
+# Generate the Xcode project with XcodeGen: `cd iosApp && xcodegen`
+name: mLabeler
+options:
+  bundleIdPrefix: pw.msan
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  mLabeler:
+    type: application
+    platform: iOS
+    sources:
+      - iosApp
+      # files that come with the program (the quick labelling model), as the folder "builtin" in the bundle
+      - path: ../app/builtin
+        type: folder
+        buildPhase: resources
+    info:
+      path: iosApp/Info.plist
+      properties:
+        CFBundleDisplayName: mLabeler
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        NSMicrophoneUsageDescription: mLabeler records samples for voicebanks and datasets.
+        NSLocalNetworkUsageDescription: mLabeler connects to mVocalToolkit on your local network.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CADisableMinimumFrameDurationOnPhone: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: pw.msan.mlabeler
+        # CI passes the real values from gradle.properties
+        MARKETING_VERSION: "0.1.3"
+        CURRENT_PROJECT_VERSION: "5"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: ["-framework", "MLabeler"]
+        FRAMEWORK_SEARCH_PATHS: ["$(SRCROOT)/../app/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"]
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    preBuildScripts:
+      - name: Build Kotlin framework
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew :app:embedAndSignAppleFrameworkForXcode

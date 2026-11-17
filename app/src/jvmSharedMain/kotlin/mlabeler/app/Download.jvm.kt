@@ -1,0 +1,56 @@
+package mlabeler.app
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+
+/**
+ * Downloads [url] into [to] (through a ".part" file, so a broken download never looks finished). With [sha256] (hex)
+ * a file with another checksum is thrown away: damaged on the way, or not the file the release published.
+ */
+internal suspend fun downloadFile(url: String, to: File, sha256: String? = null, progress: (Float) -> Unit) = withContext(Dispatchers.IO) {
+    check(!AppInfo.PLAY_STORE) { "Application downloads are unavailable in this build" }
+    to.parentFile?.mkdirs()
+    val part = File(to.path + ".part")
+    val c = URL(url).openConnection() as HttpURLConnection
+    c.instanceFollowRedirects = true
+    c.connectTimeout = 15_000
+    c.readTimeout = 60_000
+    c.setRequestProperty("User-Agent", "mLabeler/${AppInfo.VERSION}")
+    try {
+        val code = c.responseCode
+        if (code !in 200..299) throw IllegalStateException("HTTP $code")
+        val total = c.contentLengthLong
+        var done = 0L
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        c.inputStream.use { input ->
+            part.outputStream().use { out ->
+                val buf = ByteArray(1 shl 16)
+                while (true) {
+                    ensureActive()
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    digest.update(buf, 0, n)
+                    done += n
+                    if (total > 0) progress((done.toDouble() / total).toFloat().coerceIn(0f, 1f))
+                }
+            }
+        }
+        if (total > 0 && done != total) throw IllegalStateException("incomplete download ($done of $total bytes)")
+        if (sha256 != null) {
+            val got = digest.digest().joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
+            if (!got.equals(sha256.trim(), ignoreCase = true)) {
+                part.delete()
+                throw IllegalStateException("the downloaded file is damaged (its SHA-256 differs from the release's)")
+            }
+        }
+        to.delete()
+        if (!part.renameTo(to)) { part.copyTo(to, overwrite = true); part.delete() }
+    } finally {
+        c.disconnect()
+    }
+}

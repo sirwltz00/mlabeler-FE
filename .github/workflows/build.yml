@@ -1,0 +1,192 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  web:
+    uses: ./.github/workflows/web.yml
+    permissions: { contents: read }
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :core:jvmTest
+      - name: File access, pending saves and asynchronous opening regressions
+        run: ./gradlew :app:desktopTest --tests mlabeler.app.state.PendingSavesTest --tests mlabeler.app.SaveFailureTest --tests mlabeler.app.AppleWorkflowTest
+
+  android:
+    runs-on: ubuntu-latest
+    env:
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Signing key (repository secrets ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS)
+        if: ${{ env.KEYSTORE_B64 != '' }}
+        run: echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks" && echo "MLABELER_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - run: ./gradlew :app:assembleRelease
+        env:
+          MLABELER_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          MLABELER_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      - run: |
+          V=$(grep '^app.version=' gradle.properties | cut -d= -f2)
+          mv app/build/outputs/apk/release/*.apk "app/build/outputs/apk/release/mLabeler-$V-android.apk"
+      # the certificate the APK is signed with, for comparing with the key; a release without the key is refused,
+      # since an APK signed by a temporary key cannot be updated later
+      - name: Signature
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SIGNER=$(find "$SDK/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          echo "APK: $APK"
+          echo "apksigner: ${SIGNER:-not found in $SDK/build-tools}"
+          if [ -n "$SIGNER" ]; then "$SIGNER" verify --print-certs "$APK" | grep -E "certificate (DN|SHA-256)" || echo "::warning::apksigner could not read the signature"; fi
+          AAPT=$(find "$SDK/build-tools" -name aapt -type f | sort -V | tail -1)
+          "$AAPT" dump permissions "$APK" | grep -F 'android.permission.INTERNET'
+          if [ -z "$KEYSTORE_B64" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            echo "::error::No signing key (secret ANDROID_KEYSTORE_BASE64): the release APK would be signed with a temporary key"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-android
+          path: app/build/outputs/apk/release/*.apk
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, task: packageMsi, dir: msi, ext: msi, name: windows-x64 }
+          - { os: macos-latest, task: packageDmg, dir: dmg, ext: dmg, name: macos }
+          - { os: ubuntu-latest, task: packageDeb, dir: deb, ext: deb, name: linux-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:${{ matrix.task }}
+      - name: Check packaged macOS permissions, encodings and signature
+        if: runner.os == 'macOS'
+        run: python3 tools/check-apple-package.py macos app/build/compose/binaries/main/app/mLabeler.app
+      # installer file names carry the app version, not the internal package version
+      - shell: bash
+        run: |
+          V=$(grep '^app.version=' gradle.properties | cut -d= -f2)
+          mkdir -p out
+          mv app/build/compose/binaries/main/${{ matrix.dir }}/*.${{ matrix.ext }} "out/mLabeler-$V-${{ matrix.name }}.${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-${{ matrix.name }}-${{ matrix.ext }}
+          path: out/*
+
+  # any Linux distribution: unpack and run bin/mLabeler (Java included)
+  linux-portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:createDistributable
+      - run: |
+          V=$(grep '^app.version=' gradle.properties | cut -d= -f2)
+          tar -C app/build/compose/binaries/main/app -czf "mLabeler-$V-linux-x64.tar.gz" mLabeler
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-linux-portable
+          path: mLabeler-*-linux-x64.tar.gz
+
+  windows-portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      # a current Go: launchers built with an old one (1.20, the last for Windows 7) set off antivirus heuristics;
+      # Windows 7 and 8.1 start the program through a .cmd file in the zip instead
+      - uses: actions/setup-go@v5
+        with: { go-version: 'stable' }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: |
+          V=$(grep '^app.version=' gradle.properties | cut -d= -f2)
+          tools/windows-portable.sh "build/mLabeler-$V-windows-x64.zip"
+          PORTABLE=1 tools/windows-portable.sh "build/mLabeler-$V-windows-x64-portable.zip"
+      # two separate downloads: the usual zip and the fully portable one
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-windows-x64-zip
+          path: build/mLabeler-*-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-windows-x64-portable
+          path: build/mLabeler-*-windows-x64-portable.zip
+
+  ios:
+    # Catch Apple API and file-system regressions before release, including on pull requests.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew :app:linkDebugFrameworkIosSimulatorArm64 :core:iosSimulatorArm64Test :app:iosSimulatorArm64Test
+
+  # An unsigned .ipa: people install it with AltStore, SideStore, Sideloadly or TrollStore,
+  # which sign it with their own Apple ID.
+  ios-ipa:
+    # iOS builds take long: only for releases (tags) and runs started by hand
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - uses: gradle/actions/setup-gradle@v4
+      - run: brew install xcodegen
+      - name: Build
+        run: |
+          V=$(grep '^app.version=' gradle.properties | cut -d= -f2)
+          SHORT=${V%%-*}
+          CODE=$(git rev-list --count HEAD)
+          cd iosApp
+          xcodegen
+          xcodebuild -project mLabeler.xcodeproj -target mLabeler -configuration Release -sdk iphoneos \
+            SYMROOT="$PWD/build" MARKETING_VERSION="$SHORT" CURRENT_PROJECT_VERSION="$CODE" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload
+          cp -R build/Release-iphoneos/mLabeler.app Payload/
+          zip -qry "../mLabeler-$V-ios-unsigned.ipa" Payload
+          cd ..
+          python3 tools/check-apple-package.py ios "mLabeler-$V-ios-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mLabeler-ios
+          path: mLabeler-*-ios-unsigned.ipa
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, android, desktop, windows-portable, linux-portable, ios, ios-ipa, web]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        # Include installers and the web ZIP, but not browser test reports.
+        with: { path: dist, pattern: 'mLabeler-*' }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          prerelease: ${{ contains(github.ref, '-') }}

@@ -1,0 +1,225 @@
+package mlabeler.app.ui
+
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import mlabeler.app.Platform
+import mlabeler.app.i18n.L
+import mlabeler.app.i18n.S
+import mlabeler.app.state.EditorState
+import mlabeler.app.state.Selection
+import mlabeler.app.theme.T
+import mlabeler.core.io.Paths
+import mlabeler.core.model.IntervalTier
+import mlabeler.core.model.name
+
+val entriesTitle = L("Entries", "Записи")
+private val thisFile = L("This file", "Этот файл")
+private val allFiles = L("All files", "Все файлы")
+private val summary = L("Counts", "Подсчёт")
+private val searchHint = L("text, or name: file: tier:", "текст, или name: file: tier:")
+private val selectT = L("Select", "Выбрать")
+private val allShown = L("All shown", "Все видимые")
+private val mergeLeft = L("Remove (join with the previous one)", "Удалить (присоединить к предыдущему)")
+private val goT = L("Go to it", "Перейти")
+private val renameAllT = L("Rename every «{0}»…", "Переименовать все «{0}»…")
+private val onlyT = L("Show only «{0}»", "Показать только «{0}»")
+private val countLine = L("{0} entries", "записей: {0}")
+private val followT = L("Follow", "Следовать")
+private val followHint = L("The list scrolls to the phoneme selected on the timeline", "Список прокручивается к фонеме, выбранной на дорожке")
+
+/** One interval somewhere in the folder. */
+private data class Entry(val item: Int, val file: String, val tier: String, val index: Int, val text: String, val start: Double, val end: Double)
+
+private fun matches(q: String, e: Entry): Boolean {
+    if (q.isBlank()) return true
+    return q.split(';').map { it.trim() }.filter { it.isNotEmpty() }.all { p ->
+        fun v(prefix: String) = p.removePrefix(prefix).trim().trim('"')
+        when {
+            p.startsWith("name:") -> v("name:").let { if (it.startsWith("=")) e.text == it.drop(1) else e.text.contains(it, true) }
+            p.startsWith("file:") -> e.file.contains(v("file:"), true)
+            p.startsWith("tier:") -> e.tier.equals(v("tier:"), true)
+            else -> e.text.contains(p, true) || e.file.contains(p, true)
+        }
+    }
+}
+
+/** The list of intervals (phonemes, words…) of this file or the whole folder, with search and counts. */
+@Composable
+fun EntriesPanel(ed: EditorState, modifier: Modifier = Modifier, onOpened: () -> Unit = {}) {
+    val c = T.c
+    var all by remember { mutableStateOf(false) }
+    var counts by remember { mutableStateOf(false) }
+    var query by remember { mutableStateOf("") }
+    var everything by remember { mutableStateOf<List<Entry>?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    var picked by remember(ed.index) { mutableStateOf(emptySet<Int>()) }
+    var newText by remember { mutableStateOf("") }
+    var menuFor by remember { mutableStateOf<String?>(null) }
+    val doc = ed.doc
+    val current: List<Entry> = remember(doc, ed.index, ed.activeTier) {
+        val t = doc?.tiers?.getOrNull(ed.activeTier) as? IntervalTier ?: return@remember emptyList()
+        (0 until t.size).map { Entry(ed.index, ed.item?.id ?: "", t.name, it, t.texts[it], t.startOf(it), t.endOf(it)) }
+    }
+    LaunchedEffect(all, ed.items) {
+        if (!all) return@LaunchedEffect
+        everything = withContext(Dispatchers.Default) {
+            ed.items.withIndex().flatMap { (k, item) ->
+                val d = runCatching { ed.workspace.readLabels(item, 0.0) }.getOrNull() ?: return@flatMap emptyList()
+                d.tiers.filterIsInstance<IntervalTier>().flatMap { t ->
+                    (0 until t.size).map { Entry(k, item.id, t.name, it, t.texts[it], t.startOf(it), t.endOf(it)) }
+                }
+            }
+        }
+    }
+    val source = if (all) everything.orEmpty() else current
+    val list = remember(source, query) { source.filter { matches(query, it) } }
+    Column(modifier.background(c.panel)) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Field(query, { query = it }, Modifier.fillMaxWidth(), placeholder = searchHint())
+            androidx.compose.foundation.layout.FlowRow(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Chip(thisFile(), !all) { all = false }
+                Chip(allFiles(), all) { all = true }
+                Chip(summary(), counts) { counts = !counts }
+                if (!all) Chip(selectT(), picking) { picking = !picking; picked = emptySet() }
+                Tip(followHint()) {
+                    Chip(followT(), ed.app.settings.layout.entriesFollow) {
+                        ed.app.update { st -> st.copy(layout = st.layout.copy(entriesFollow = !st.layout.entriesFollow)) }
+                    }
+                }
+            }
+        }
+        if (all && everything == null) Text(S.loading(), color = c.muted, fontSize = 13.sp, modifier = Modifier.padding(12.dp))
+        if (counts) {
+            // how often each label occurs; a click searches for it
+            val byText = list.groupingBy { it.text }.eachCount().entries.sortedByDescending { it.value }
+            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+                items(byText, key = { it.key }) { (text, n) ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { query = "name:=$text"; counts = false }.padding(horizontal = 12.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(text.ifEmpty { "∅" }, color = c.text, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        Text(n.toString(), color = c.muted, fontSize = 12.sp)
+                    }
+                }
+            }
+        } else {
+            val sel = (ed.selection as? Selection.Interval)?.ref
+            val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+            val selTier = sel?.let { doc?.tiers?.getOrNull(it.tier)?.name }
+            val activeRow = if (sel == null) -1 else list.indexOfFirst { it.item == ed.index && it.index == sel.index && it.tier == selTier }
+            // the selected phoneme is brought into view: when it changes, and when the list is shown again
+            LaunchedEffect(activeRow, counts, all) {
+                if (activeRow < 0 || !ed.app.settings.layout.entriesFollow) return@LaunchedEffect
+                val info = listState.layoutInfo
+                val visible = info.visibleItemsInfo
+                val shown = visible.size > 2 && activeRow > visible.first().index && activeRow < visible.last().index
+                if (!shown) listState.scrollToItem((activeRow - (visible.size / 2).coerceAtLeast(3)).coerceAtLeast(0))
+            }
+            androidx.compose.foundation.layout.Box(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                itemsIndexed(list, key = { _, it -> "${it.item}/${it.tier}/${it.index}" }) { pos, e ->
+                    val active = e.item == ed.index && sel != null && sel.index == e.index &&
+                        doc?.tiers?.getOrNull(sel.tier)?.name == e.tier
+                    val key = "${e.item}/${e.tier}/${e.index}"
+                    androidx.compose.foundation.layout.Box {
+                    MenuPopup(menuFor == key, onDismiss = { menuFor = null }, focusable = true) {
+                        MenuItems(buildList {
+                            add(MItem(goT()) { ed.openInterval(e.item, e.tier, e.index); onOpened() })
+                            add(MItem(S.rename()) { ed.openInterval(e.item, e.tier, e.index); ed.selectedInterval()?.let { r -> if (e.item == ed.index) ed.editingText = r } })
+                            if (e.text.isNotEmpty()) {
+                                add(MItem(renameAllT.format(e.text)) { ed.app.batchRenameFrom = e.text; ed.app.showBatchRename = true })
+                                add(MItem(onlyT.format(e.text)) { query = "name:=" + e.text })
+                            }
+                            if (e.item == ed.index && e.index > 0) {
+                                add(MSep)
+                                add(MItem(mergeLeft()) {
+                                    val k = doc?.tierIndex(e.tier) ?: -1
+                                    if (k >= 0) ed.updateDoc { d -> mlabeler.core.edit.Edits.removeBound(d, mlabeler.core.edit.BoundRef(k, e.index)) }
+                                })
+                            }
+                        }) { menuFor = null }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = if (Platform.isMobile) 44.dp else 26.dp)
+                            .background(if (active) c.accent.copy(alpha = if (c.square) 1f else 0.16f) else if (menuFor == key) c.panelAlt else c.panel)
+                            .withContextMenu(onMenu = { menuFor = key }) {
+                                if (picking && !all) picked = if (e.index in picked) picked - e.index else picked + e.index
+                                else { ed.openInterval(e.item, e.tier, e.index); onOpened() }
+                            }
+                            .padding(horizontal = 12.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val fg = if (active && c.square) c.onAccent else c.text
+                        if (picking && !all) SelectionCheckbox(e.index in picked, Modifier.padding(end = 6.dp), inverted = active && c.square)
+                        Text((pos + 1).toString(), color = if (active && c.square) c.onAccent else c.muted, fontSize = 11.sp, modifier = Modifier.width(38.dp), maxLines = 1)
+                        Text(e.text.ifEmpty { "∅" }, color = fg, fontSize = 13.sp, modifier = Modifier.width(62.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            if (all) Paths.stem(e.file) else formatTime(e.start), color = if (active && c.square) c.onAccent else c.muted,
+                            fontSize = 11.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(formatMs(e.end - e.start), color = if (active && c.square) c.onAccent else c.muted, fontSize = 11.sp)
+                    }
+                    }
+                }
+            }
+            LazyScrollbar(listState, Modifier.align(Alignment.CenterEnd).fillMaxHeight(), label = { n -> list.getOrNull(n)?.text?.ifEmpty { "∅" } })
+            }
+        }
+        Divider()
+        if (picking && !all) {
+            // bulk actions on the picked intervals of this file
+            Divider()
+            Column(Modifier.padding(10.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Chip(allShown(), false) { picked = list.map { it.index }.toSet() }
+                    Chip(S.cancel(), false) { picked = emptySet() }
+                }
+                Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Field(newText, { newText = it }, Modifier.weight(1f), placeholder = S.text())
+                    Btn(S.rename(), enabled = picked.isNotEmpty()) {
+                        val k = ed.activeTier
+                        ed.updateDoc { d -> mlabeler.core.edit.Edits.setTexts(d, picked.map { mlabeler.core.edit.IntervalRef(k, it) }) { newText.trim() } }
+                    }
+                }
+                Btn(mergeLeft(), enabled = picked.isNotEmpty(), modifier = Modifier.padding(top = 6.dp)) {
+                    val k = ed.activeTier
+                    ed.updateDoc { d ->
+                        var out = d
+                        // from the end so indexes stay valid
+                        for (i in picked.sortedDescending()) if (i > 0) out = mlabeler.core.edit.Edits.removeBound(out, mlabeler.core.edit.BoundRef(k, i))
+                        out
+                    }
+                    picked = emptySet()
+                }
+            }
+        }
+        Text(countLine.format(list.size), color = c.muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+    }
+}
